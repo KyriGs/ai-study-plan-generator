@@ -1,0 +1,11 @@
+.env
+.envpy
+__pycache__/
+*.pyc
+.venv/
+venv/
+.streamlit/secrets.toml
+
+# Local tooling / unrelated projects
+.claude/
+hello-world/

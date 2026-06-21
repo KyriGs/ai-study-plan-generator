@@ -18,6 +18,9 @@ schema) so the model returns clean, typed data instead of raw text.
 - Goal-driven plan generation (deadline + hours/day + skill level)
 - Structured, validated output via Pydantic schema (no fragile text parsing)
 - Per-day task breakdown with time estimates
+- Interactive progress tracking (tick off tasks, live progress bar)
+- At-a-glance stats (total days, hours, tasks)
+- Downloadable plan (.txt)
 - Graceful error handling (missing/invalid API key, API errors)
 
 ## Tech
@@ -26,7 +29,7 @@ schema) so the model returns clean, typed data instead of raw text.
 |--------------|---------------------------------|
 | Language     | Python                          |
 | UI           | Streamlit                       |
-| AI model     | Gemini (`gemini-2.0-flash`)     |
+| AI model     | Gemini (`gemini-2.5-flash`)     |
 | Output shape | Pydantic + structured outputs   |
 
 ## Run locally

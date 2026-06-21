@@ -4,6 +4,7 @@ import os
 
 import streamlit as st
 from dotenv import load_dotenv
+from fpdf import FPDF
 from google import genai
 from google.genai import errors as genai_errors
 from pydantic import BaseModel
@@ -79,6 +80,68 @@ def plan_to_text(goal: str, plan: StudyPlan) -> str:
     return "\n".join(lines)
 
 
+# The built-in PDF fonts only support latin-1, so swap common "smart" characters
+# (curly quotes, em dashes, bullets) for plain ones and drop anything else.
+_PDF_REPLACEMENTS = {
+    "—": "-", "–": "-", "‘": "'", "’": "'",
+    "“": '"', "”": '"', "•": "-", "…": "...", "·": "-",
+}
+
+BRAND_PURPLE = (108, 92, 231)
+
+
+def _pdf_safe(text: str) -> str:
+    """Make arbitrary model text safe for the built-in (latin-1) PDF fonts."""
+    for bad, good in _PDF_REPLACEMENTS.items():
+        text = text.replace(bad, good)
+    return text.encode("latin-1", "replace").decode("latin-1")
+
+
+def plan_to_pdf(goal: str, plan: StudyPlan) -> bytes:
+    """Render the plan as a formatted PDF and return the raw bytes."""
+    pdf = FPDF()
+    pdf.set_auto_page_break(auto=True, margin=15)
+    pdf.add_page()
+
+    def line(text: str, height: float):
+        # Always wrap full-width and return to the left margin for the next line.
+        pdf.multi_cell(0, height, _pdf_safe(text), new_x="LMARGIN", new_y="NEXT")
+
+    pdf.set_font("Helvetica", "B", 20)
+    pdf.set_text_color(*BRAND_PURPLE)
+    line("AI Study Plan", 10)
+
+    pdf.set_text_color(0, 0, 0)
+    pdf.set_font("Helvetica", "B", 12)
+    line(f"Goal: {goal}", 8)
+    pdf.set_font("Helvetica", "", 11)
+    line(plan.summary, 6)
+    pdf.ln(4)
+
+    for d in plan.days:
+        total = sum(t.minutes for t in d.tasks)
+        pdf.set_font("Helvetica", "B", 13)
+        pdf.set_text_color(*BRAND_PURPLE)
+        line(f"Day {d.day} - {d.focus}  ({total} min)", 8)
+        pdf.set_text_color(0, 0, 0)
+        for t in d.tasks:
+            pdf.set_font("Helvetica", "B", 11)
+            line(f"  - {t.title} ({t.minutes} min)", 6)
+            pdf.set_font("Helvetica", "", 10)
+            line(f"     {t.detail}", 5)
+        pdf.ln(2)
+
+    pdf.set_font("Helvetica", "B", 13)
+    pdf.set_text_color(*BRAND_PURPLE)
+    line("Tips", 8)
+    pdf.set_text_color(0, 0, 0)
+    pdf.set_font("Helvetica", "", 10)
+    for tip in plan.tips:
+        line(f"- {tip}", 5)
+
+    return bytes(pdf.output())
+
+
 # ---- Page setup + custom styling ----
 st.set_page_config(page_title="AI Study Plan Generator", page_icon="📚")
 
@@ -149,8 +212,30 @@ if "plan" in st.session_state:
 
     st.success(plan.summary)
 
-    st.download_button(
-        "⬇️ Download plan (.txt)",
+    # ---- Quick stats ----
+    all_tasks = [(d.day, i, t) for d in plan.days for i, t in enumerate(d.tasks)]
+    total_minutes = sum(t.minutes for _, _, t in all_tasks)
+    c1, c2, c3 = st.columns(3)
+    c1.metric("Days", len(plan.days))
+    c2.metric("Total time", f"{total_minutes / 60:.1f} h")
+    c3.metric("Tasks", len(all_tasks))
+
+    # ---- Progress (reads checkbox state set on the previous run) ----
+    done = sum(1 for day, i, _ in all_tasks if st.session_state.get(f"task_{day}_{i}"))
+    st.progress(
+        done / len(all_tasks) if all_tasks else 0,
+        text=f"Progress: {done}/{len(all_tasks)} tasks done",
+    )
+
+    dl1, dl2 = st.columns(2)
+    dl1.download_button(
+        "⬇️ Download PDF",
+        data=plan_to_pdf(goal, plan),
+        file_name="study_plan.pdf",
+        mime="application/pdf",
+    )
+    dl2.download_button(
+        "⬇️ Download .txt",
         data=plan_to_text(goal, plan),
         file_name="study_plan.txt",
         mime="text/plain",
@@ -159,9 +244,12 @@ if "plan" in st.session_state:
     for d in plan.days:
         total = sum(t.minutes for t in d.tasks)
         with st.expander(f"Day {d.day} — {d.focus}  ({total} min)"):
-            for t in d.tasks:
-                st.markdown(f"**{t.title}** · {t.minutes} min")
-                st.write(t.detail)
+            for i, t in enumerate(d.tasks):
+                st.checkbox(
+                    f"**{t.title}** · {t.minutes} min",
+                    key=f"task_{d.day}_{i}",
+                )
+                st.caption(t.detail)
 
     st.subheader("Tips")
     for tip in plan.tips:

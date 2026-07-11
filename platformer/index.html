@@ -1,0 +1,34 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Neon Canyon</title>
+<style>
+  html, body {
+    margin: 0;
+    padding: 0;
+    height: 100%;
+    background: #05050f;
+    overflow: hidden;
+  }
+  body {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+  }
+  canvas {
+    /* Fixed 16:9 internal resolution, scaled to fit the window */
+    width: min(100vw, calc(100vh * 16 / 9));
+    height: min(100vh, calc(100vw * 9 / 16));
+    display: block;
+    outline: none;
+  }
+</style>
+</head>
+<body>
+<canvas id="game" width="960" height="540"></canvas>
+<script src="levels.js"></script>
+<script src="game.js"></script>
+</body>
+</html>

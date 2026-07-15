@@ -8,6 +8,20 @@
 - [x] Complete screen: time, best, NEW RECORD flash
 - [x] Verify: dash distance, ghost appears on 2nd run, record persists across reload
 
+## Round 8: volume sliders
+
+- [x] "🔊 SOUND & FX" button on title -> SOUND & EFFECTS screen with 3 draggable sliders
+- [x] MUSIC: live gain while dragging; SOUNDS: scales all synth bleeps + preview blip on release; EFFECTS: thins particles statistically + scales damage flash
+- [x] Click-to-set + drag, knob glow while dragging, % readout, saved to localStorage neonCanyon.settings
+- [x] Verified: click/drag/save/live-gain, vfx=0 spawns zero particles, panel visual capture, L1 regression clean
+
+## Round 7: little knight reskin
+
+- [x] Player = hooded knight: green cloak with fluttering jagged hem, pale mask, visor strip, outward-curving horns
+- [x] Full animation set: run lean+bob+legs, idle breathe+blink, fall flare+wide visor, dash flatten+stream+narrow visor
+- [x] Ghost racer wears the same cloak silhouette (translucent blue)
+- [x] Verified visually via canvas-crop captures (idle/run/dash/fall poses) + full 5-level E2E, 0 deaths, console clean
+
 ## Round 6: rebindable keys
 
 - [x] "⌨ CHANGE KEYS" button on title (canvas now has mouse support: hover glow + pointer cursor)

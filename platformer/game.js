@@ -62,7 +62,8 @@ const audio = {
     if (this.ctx && this.ctx.state === "suspended") this.ctx.resume();
   },
   tone(f0, f1, dur, type, vol) {
-    if (!this.ctx || this.muted) return;
+    if (!this.ctx || this.muted || settings.sfx <= 0.01) return;
+    vol *= settings.sfx;
     const t = this.ctx.currentTime;
     const o = this.ctx.createOscillator();
     const g = this.ctx.createGain();
@@ -120,14 +121,14 @@ const music = {
   sync() {
     if (!audio.ctx) return;
     this.ensure();
-    const want = (game.state === "title" || game.state === "win" || game.state === "binds") ? "title" : "L" + game.levelIndex;
+    const want = (game.state === "title" || game.state === "win" || game.state === "binds" || game.state === "options") ? "title" : "L" + game.levelIndex;
     if (want !== this.trackId) {
       this.trackId = want;
       this.track = MTRACKS[want] || MTRACKS.L0;
       this.step = 0;
     }
     const duck = (game.state === "complete" || game.state === "win") ? 0.35 : 1;
-    this.gainNode.gain.setTargetAtTime(audio.muted ? 0 : 0.6 * duck, audio.ctx.currentTime, 0.15);
+    this.gainNode.gain.setTargetAtTime(audio.muted ? 0 : 0.6 * settings.music * duck, audio.ctx.currentTime, 0.15);
   },
   schedule() {
     const ctx = audio.ctx;
@@ -176,6 +177,20 @@ const music = {
   },
 };
 
+// ----- Volume / effects settings (saved to localStorage) -----
+const DEFAULT_SETTINGS = { music: 0.7, sfx: 0.7, vfx: 1.0 };
+let settings = loadSettings();
+function loadSettings() {
+  try {
+    const j = JSON.parse(localStorage.getItem("neonCanyon.settings"));
+    if (j && ["music", "sfx", "vfx"].every((k) => typeof j[k] === "number")) return j;
+  } catch (e) {}
+  return { ...DEFAULT_SETTINGS };
+}
+function saveSettings() {
+  try { localStorage.setItem("neonCanyon.settings", JSON.stringify(settings)); } catch (e) {}
+}
+
 // ----- Keybinds (rebindable, saved to localStorage) -----
 const DEFAULT_BINDS = {
   left:  ["ArrowLeft", "KeyA"],
@@ -220,15 +235,42 @@ function bindLabel(action) {
 // ----- Mouse (for menu buttons) -----
 const mouse = { x: -1, y: -1 };
 let uiButtons = []; // rebuilt every frame by the menu draw functions
+let uiSliders = [];
 let uiHover = false;
+let activeSlider = null;
 
 function canvasCoords(e) {
   const r = canvas.getBoundingClientRect();
   return { x: (e.clientX - r.left) * VIEW_W / r.width, y: (e.clientY - r.top) * VIEW_H / r.height };
 }
+function setSlider(id, frac) {
+  settings[id] = Math.round(clamp(frac, 0, 1) * 100) / 100;
+  if (id === "music") music.sync(); // live volume while dragging
+}
 canvas.addEventListener("mousemove", (e) => {
   const c = canvasCoords(e);
   mouse.x = c.x; mouse.y = c.y;
+  if (activeSlider) {
+    const s = uiSliders.find((u) => u.id === activeSlider);
+    if (s) setSlider(s.id, (c.x - s.x) / s.w);
+  }
+});
+canvas.addEventListener("mousedown", (e) => {
+  const c = canvasCoords(e);
+  for (const s of uiSliders) {
+    if (c.x >= s.x - 10 && c.x <= s.x + s.w + 10 && c.y >= s.y - 12 && c.y <= s.y + s.h + 12) {
+      activeSlider = s.id;
+      setSlider(s.id, (c.x - s.x) / s.w);
+      break;
+    }
+  }
+});
+window.addEventListener("mouseup", () => {
+  if (activeSlider) {
+    saveSettings();
+    if (activeSlider === "sfx") audio.coin(); // preview the new level
+    activeSlider = null;
+  }
 });
 canvas.addEventListener("click", (e) => {
   audio.init();
@@ -240,6 +282,7 @@ canvas.addEventListener("click", (e) => {
 
 function uiAction(id) {
   if (id === "controls") { game.state = "binds"; }
+  else if (id === "options") { game.state = "options"; }
   else if (id === "back") { game.state = "title"; bindCapture = null; }
   else if (id === "reset") { binds = JSON.parse(JSON.stringify(DEFAULT_BINDS)); saveBinds(); bindCapture = null; }
   else if (id.startsWith("bind:")) { bindCapture = id.slice(5); }
@@ -282,7 +325,7 @@ window.addEventListener("keyup", (e) => {
 window.addEventListener("blur", () => keys.clear());
 
 function onKeyPressed(code) {
-  if (game.state === "binds") {
+  if (game.state === "binds" || game.state === "options") {
     if (code === "Escape") { game.state = "title"; music.sync(); }
     return;
   }
@@ -641,6 +684,8 @@ function respawnPlayer() {
 
 // ----- Particles -----
 function spawnParticle(x, y, vx, vy, life, size, color, grav) {
+  // EFFECTS slider statistically thins particles (1 = all, 0 = none)
+  if (settings.vfx < 0.99 && Math.random() > settings.vfx) return;
   game.particles.push({ x, y, vx, vy, life, max: life, size, color, grav });
 }
 function dust(x, y, n) {
@@ -886,11 +931,33 @@ function drawGhost() {
   const f = fi - i;
   const x = s0[0] + (s1[0] - s0[0]) * f;
   const y = s0[1] + (s1[1] - s0[1]) * f;
+  ctx.save();
+  ctx.translate(x + PLAYER_W / 2, y + PLAYER_H);
   ctx.globalAlpha = 0.3;
   ctx.fillStyle = "#9fd8ff";
-  roundRect(x, y, PLAYER_W, PLAYER_H, 6);
+  knightCloak(1, 0, 0.8); // ghost wears the same cloak
   ctx.fill();
   ctx.globalAlpha = 1;
+  ctx.restore();
+}
+
+// Little knight: hooded cloak silhouette with a fluttering jagged hem.
+// Local coords: origin at the feet center, up = negative y.
+function knightCloak(flare, skew, flutterAmp) {
+  const t = game.time;
+  const hw = 11 * flare; // hem half-width
+  ctx.beginPath();
+  ctx.moveTo(-hw, 0);
+  for (let i = 1; i <= 3; i++) {
+    const hx = -hw + (i * hw * 2) / 4 + skew;
+    const hy = (i % 2 === 1 ? -3 : 0) + Math.sin(t * 13 + i * 2.1) * flutterAmp;
+    ctx.lineTo(hx, hy);
+  }
+  ctx.lineTo(hw, 0);
+  ctx.quadraticCurveTo(hw + 1, -14, 2, -29);  // right side up to the hood
+  ctx.quadraticCurveTo(0, -30.5, -2, -29);    // hood point
+  ctx.quadraticCurveTo(-hw - 1, -14, -hw, 0); // left side back down
+  ctx.closePath();
 }
 
 function drawPlayer() {
@@ -899,30 +966,64 @@ function drawPlayer() {
   // flash while invincible
   if (p.iframes > 0 && Math.floor(game.time * 16) % 2 === 0) return;
 
-  const cx = p.x + PLAYER_W / 2;
-  const bottom = p.y + PLAYER_H;
-  const sy = p.sy;
-  const sx = 2 - sy; // squash one axis, stretch the other
+  const t = game.time;
+  const dashing = p.dashTime > 0;
+  const running = p.onGround && Math.abs(p.vx) > 40;
+  const falling = !p.onGround && p.vy > 150;
+  const idle = p.onGround && !running;
 
   ctx.save();
-  ctx.translate(cx, bottom);
-  ctx.scale(sx, sy);
-  ctx.shadowColor = C.player;
-  ctx.shadowBlur = 12;
+  ctx.translate(p.x + PLAYER_W / 2, p.y + PLAYER_H);
+  ctx.scale(2 - p.sy, p.sy); // squash & stretch
+  if (dashing) ctx.scale(1.12, 0.88);
+  // lean into the run, tip back when rising, nose-down when falling
+  ctx.rotate(running ? p.facing * 0.09 : !p.onGround ? p.facing * (p.vy > 0 ? -0.06 : 0.05) : 0);
+  ctx.translate(0, running ? Math.sin(t * 18) * 1.5 : Math.sin(t * 2.5) * 0.7); // bob / breathe
+
+  // little legs peeking under the hem
+  if (running) {
+    ctx.fillStyle = "#123818";
+    const ph = Math.sin(t * 18) > 0;
+    ctx.fillRect(ph ? -7 : -4, -3, 4, 4);
+    ctx.fillRect(ph ? 3 : 0, -3, 4, 4);
+  }
+
+  // cloak: flares when falling, streams back when dashing
   ctx.fillStyle = C.player;
-  roundRect(-PLAYER_W / 2, -PLAYER_H, PLAYER_W, PLAYER_H, 6);
+  ctx.shadowColor = C.player;
+  ctx.shadowBlur = dashing ? 18 : 12;
+  knightCloak(falling ? 1.18 : 1, dashing ? -p.facing * 5 : 0, falling ? 2.2 : running ? 1.4 : 0.7);
   ctx.fill();
   ctx.shadowBlur = 0;
-  // eye
-  ctx.fillStyle = "#0a1a0a";
-  const ex = p.facing * 4;
+
+  // horn nubs
+  ctx.strokeStyle = "#eef7ee";
+  ctx.lineWidth = 2.4;
+  ctx.lineCap = "round";
   ctx.beginPath();
-  ctx.arc(ex, -PLAYER_H + 10, 3.2, 0, Math.PI * 2);
-  ctx.fill();
-  ctx.fillStyle = "#ffffff";
+  ctx.moveTo(-4.5, -26);
+  ctx.quadraticCurveTo(-7.5, -31, -11, -32.5);
+  ctx.moveTo(4.5, -26);
+  ctx.quadraticCurveTo(7.5, -31, 11, -32.5);
+  ctx.stroke();
+
+  // pale mask, shifted toward facing
+  const fx = p.facing * 2.5;
+  ctx.fillStyle = "#f2fff0";
   ctx.beginPath();
-  ctx.arc(ex + p.facing, -PLAYER_H + 9, 1.2, 0, Math.PI * 2);
+  ctx.ellipse(fx, -19.5, 6.5, 7.2, 0, 0, Math.PI * 2);
   ctx.fill();
+
+  // visor strip: emotes by shape — narrow slit dashing, wide when falling,
+  // quick blink while idle
+  let vh = 2.6;
+  if (dashing) vh = 1.4;
+  else if (falling) vh = 4.2;
+  else if (idle && (t % 3.3) < 0.12) vh = 0.8;
+  ctx.fillStyle = dashing ? "#356e3d" : "#0c2412";
+  roundRect(fx + p.facing * 1.2 - 3.5, -20 - vh / 2, 7, vh, vh / 2);
+  ctx.fill();
+
   ctx.restore();
 }
 
@@ -1062,6 +1163,64 @@ function drawTitle() {
 
   blinkText("PRESS ENTER TO START", VIEW_W / 2, 485, "bold 22px Consolas, monospace");
   uiButton("controls", VIEW_W - 190, 16, 174, 40, "⌨ CHANGE KEYS");
+  uiButton("options", VIEW_W - 190, 64, 174, 40, "🔊 SOUND & FX");
+}
+
+function drawSlider(id, label, x, y, w) {
+  uiSliders.push({ id, x, y, w, h: 8 });
+  const v = settings[id];
+  ctx.fillStyle = C.text;
+  ctx.font = "bold 17px Consolas, monospace";
+  ctx.textAlign = "left";
+  ctx.fillText(label, x - 185, y + 10);
+  // track
+  ctx.fillStyle = "rgba(63,232,255,0.15)";
+  roundRect(x, y, w, 8, 4);
+  ctx.fill();
+  // fill
+  if (v > 0) {
+    ctx.fillStyle = C.accent;
+    ctx.shadowColor = C.accent;
+    ctx.shadowBlur = 6;
+    roundRect(x, y, Math.max(8, w * v), 8, 4);
+    ctx.fill();
+    ctx.shadowBlur = 0;
+  }
+  // knob
+  const dragging = activeSlider === id;
+  ctx.fillStyle = dragging ? "#ffffff" : "#cfeaff";
+  ctx.shadowColor = C.accent;
+  ctx.shadowBlur = dragging ? 14 : 8;
+  ctx.beginPath();
+  ctx.arc(x + w * v, y + 4, dragging ? 9 : 7, 0, Math.PI * 2);
+  ctx.fill();
+  ctx.shadowBlur = 0;
+  // percent
+  ctx.fillStyle = "rgba(207,232,255,0.7)";
+  ctx.font = "15px Consolas, monospace";
+  ctx.textAlign = "left";
+  ctx.fillText(Math.round(v * 100) + "%", x + w + 18, y + 10);
+}
+
+function drawOptions() {
+  const { x, y } = drawPanel(620, 340);
+  ctx.textAlign = "center";
+  ctx.fillStyle = C.accent;
+  ctx.shadowColor = C.accent;
+  ctx.shadowBlur = 14;
+  ctx.font = "bold 32px Consolas, monospace";
+  ctx.fillText("SOUND & EFFECTS", VIEW_W / 2, y + 52);
+  ctx.shadowBlur = 0;
+
+  drawSlider("music", "MUSIC", x + 240, y + 95, 260);
+  drawSlider("sfx", "SOUNDS", x + 240, y + 157, 260);
+  drawSlider("vfx", "EFFECTS", x + 240, y + 219, 260);
+
+  uiButton("back", x + 210, y + 262, 200, 42, "BACK  (ESC)");
+  ctx.fillStyle = "rgba(207,232,255,0.5)";
+  ctx.font = "13px Consolas, monospace";
+  ctx.textAlign = "center";
+  ctx.fillText("EFFECTS = particles & screen flash   |   M still mutes everything", VIEW_W / 2, y + 325);
 }
 
 const BIND_ROWS = [
@@ -1170,18 +1329,20 @@ function frame(now) {
   game.damageFlash = Math.max(0, game.damageFlash - dt);
 
   uiButtons = [];
+  uiSliders = [];
   uiHover = false;
   drawBackground();
-  if (game.state !== "title" && game.state !== "binds") {
+  if (game.state !== "title" && game.state !== "binds" && game.state !== "options") {
     drawWorld();
     drawHUD();
   }
-  if (game.damageFlash > 0) {
-    ctx.fillStyle = `rgba(255,40,80,${game.damageFlash * 0.6})`;
+  if (game.damageFlash > 0 && settings.vfx > 0.01) {
+    ctx.fillStyle = `rgba(255,40,80,${game.damageFlash * 0.6 * settings.vfx})`;
     ctx.fillRect(0, 0, VIEW_W, VIEW_H);
   }
   if (game.state === "title") drawTitle();
   else if (game.state === "binds") drawBinds();
+  else if (game.state === "options") drawOptions();
   else if (game.state === "complete") drawComplete();
   else if (game.state === "win") drawWin();
   canvas.style.cursor = uiHover ? "pointer" : "default";
